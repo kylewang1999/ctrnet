@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+main_kaiyuan.ipynb
 
 # C extensions
 *.so
