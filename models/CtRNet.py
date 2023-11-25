@@ -28,9 +28,10 @@ class CtRNet(torch.nn.Module):
         if args.trained_on_multi_gpus == True:
             self.keypoint_seg_predictor = torch.nn.DataParallel(self.keypoint_seg_predictor, device_ids=[0])
         
-        if args.keypoint_seg_model_path is not None:
-            print("Loading keypoint segmentation model from {}".format(args.keypoint_seg_model_path))
-            self.keypoint_seg_predictor.load_state_dict(torch.load(args.keypoint_seg_model_path))
+        if args.pretrained_keypoint_seg_model_path is not None:
+            print("\nLoading keypoint segmentation model from {}\n".format(args.pretrained_keypoint_seg_model_path))
+            self.keypoint_seg_predictor.load_state_dict(torch.load(args.pretrained_keypoint_seg_model_path))
+        else: print("\nTraining cTrNet from Scratch ... \n")
 
         self.keypoint_seg_predictor.eval()
 
@@ -91,7 +92,8 @@ class CtRNet(torch.nn.Module):
             _,t_list = self.robot.get_joint_RT(joint_angles[b])
             points_3d = torch.from_numpy(np.array(t_list)).float().to(self.device)
             if self.args.robot_name == "Panda":
-                points_3d = points_3d[:,[0,2,3,4,6,7,8]]
+                # points_3d = points_3d[:,[0,2,3,4,6,7,8]]
+                points_3d = points_3d[[0,2,3,4,6,7,8]]
             points_3d_batch.append(points_3d[None])
 
         points_3d_batch = torch.cat(points_3d_batch, dim=0)
@@ -100,6 +102,22 @@ class CtRNet(torch.nn.Module):
 
         return cTr, points_2d, foreground_mask
 
+    def inference_single_image_base_only(self, img, points_3d):
+        raise NotImplementedError
+
+    def inference_batch_images_base_only(self, img, points_3d):
+        ''' Infer batch image, all keypoints locate on base. 
+        Inputs: 
+            - img: (B, 3, H, W)
+            - points_3d: (B, 7, 3). Note: Forward kinematics will not affect points_3d location.
+        '''
+        if len(points_3d) == 1: points_3d = points_3d.repeat(img.shape[0], 1, 1)
+        points_2d, segmentation = self.keypoint_seg_predictor(img)
+        foreground_mask = torch.sigmoid(segmentation)
+
+        cTr = self.bpnp_m3d(points_2d, points_3d, self.K)
+        
+        return cTr, points_2d, foreground_mask
     
     def cTr_to_pose_matrix(self, cTr):
         """
@@ -134,7 +152,7 @@ class CtRNet(torch.nn.Module):
         # cTr: (6)
         # img: (1, H, W)
 
-        R = kornia.geometry.conversions.angle_axis_to_rotation_matrix(cTr[:3][None])  # (1, 3, 3)
+        R = kornia.geometry.conversions.axis_angle_to_rotation_matrix(cTr[:3][None])  # (1, 3, 3)
         R = torch.transpose(R,1,2)
         #R = to_valid_R_batch(R)
         T = cTr[3:][None]   # (1, 3)

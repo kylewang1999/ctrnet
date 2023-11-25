@@ -57,7 +57,11 @@ class PandaArm():
         
     def get_joint_RT(self, joint_angle):
         
-        assert joint_angle.shape[0] == 7
+        assert joint_angle.shape[0] in [1,7], f'joint_angle.shape[0] = {joint_angle.shape[0]}. Should be either 1 (only consider base) or 7 (consider all joints).'
+        if len(joint_angle) == 1: # Only base is considered
+            T = self.robot.fkine(joint_angle, end = self.robot.links[0], start = self.robot.links[0])
+            R_list, t_list = [T.R], [T.t]
+            return np.array(R_list),np.array(t_list)
 
 
         link_idx_list = [0,1,2,3,4,5,6,7,9]
@@ -71,8 +75,6 @@ class PandaArm():
             T = self.robot.fkine(joint_angle, end = self.robot.links[link_idx], start = self.robot.links[0])
             R_list.append(T.R)
             t_list.append(T.t)
-
-
 
         return np.array(R_list),np.array(t_list)
         

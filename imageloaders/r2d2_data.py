@@ -6,8 +6,8 @@
 
 '''Residential Robot Demonstration Dataset (R2D2) data loader. '''
 
-import sys, torch, glob, itertools
-import numpy as np
+import sys, torch, glob, os, cv2
+import numpy as np, pandas as pd
 import torchvision.transforms as transforms
 from os.path import join, abspath, expanduser, isdir, exists, dirname
 from torch.utils.data import Dataset, ConcatDataset, DataLoader
@@ -44,10 +44,71 @@ PANDA_MESH_FILES = [BASE_DIR + "/ctrnet/urdfs/Panda/meshes/visual/link0/link0.ob
                 BASE_DIR + "/ctrnet/urdfs/Panda/meshes/visual/hand/hand.obj"]
 
 
+# TODO: Generalize kp 2d and 3d to all cameras
+KEYPOINTS_2D = {
+    '23404442_left': np.array([[215.06241, 447.73056], [221.11848, 414.4581 ], [251.85588, 367.2945 ],
+                [345.09045, 360.57587], [400.59467, 448.07397], [306.23264, 498.95663], [np.nan, np.nan]], dtype=np.float32),
+    '23404442_right': None,
+    "29838012_left": np.array([[1097.1947, 569.90356], [1096.2913, 539.73474], [1072.9938, 480.52173],
+                [976.2365, 452.03995], [921.3841, 526.7741], [np.nan, np.nan], [1005.298, 583.37695]], dtype=np.float32),
+    '29838012_right': None
+}
+
+KEYPOINTS_3D = np.array([[-1.43076244e-01, -2.14468290e-03,  8.92312189e-03],   # In Robot frame
+                        [-1.25680570e-01,  6.31571448e-04,  5.56254291e-02],
+                        [-5.49979992e-02, -8.49999997e-05,  1.40000001e-01],
+                        [ 5.49880005e-02, -1.55699998e-03,  1.40000001e-01],
+                        [ 7.15439990e-02,  3.29000002e-04,  1.34900003e-03],
+                        [-1.09613143e-02, -8.00555708e-02,  3.85714277e-03],
+                        [-1.10056000e-02,  8.00555708e-02,  3.85714277e-03]], dtype=np.float32)
+
+def get_kp(camera_id=None, type='2d'): 
+    assert type in ['2d', '3d'], f"Keypoint type [{type}] not recognized. Please choose from ['2d', '3d']"
+    if camera_id is None or type == '3d': return KEYPOINTS_3D
+    else: return KEYPOINTS_2D[camera_id]
+
+def get_kp2ds(kp2d_label_dirs, width=1280, n_kp=7, fname_csv='CollectedData_kp2d.csv'):
+    ''' Read .csv file and extract 2D keypoints annotation result 
+    Inputs:
+        - kp2d_label_dirs: List of directories containing .csv files
+        - n_kp: number of keypoints
+        - fname_csv: Name of csv file containing 2D keypoint annotations
+    Returns:
+        - kp2d_data: Dictionary with camera_id keys and 2D keypoints values
+    
+    Note: Columns in CSV files are formatted as:
+        <irrelevant cols>, kp1_left_x, kp1_left_y,kp2_left_x, kp2_left_y, ...,
+                           kp1_right_x, kp1_right_y,kp2_right_x, kp2_right_y, ... 
+    '''
+
+    kp2d_data = {}
+    for path in kp2d_label_dirs:
+        csv_path = join(path, fname_csv)
+        camera_id = path.split('/')[-1]
+
+        df = pd.read_csv(csv_path)
+        max_cols = n_kp*4   # TODO: Expand max cols to args.n_kp * 4 to extract keypoints for right images
+        kp2d = df.iloc[2:,1:max_cols+1].to_numpy(dtype=np.float32)
+        kp2d_left, kp2d_right = kp2d[:,:max_cols//2], kp2d[:,max_cols//2:] 
+        
+        kp2d_data[f'{camera_id}_left'] = np.mean(kp2d_left,axis=0).reshape(-1,2)
+        kp2d_data[f'{camera_id}_right'] = np.mean(kp2d_right,axis=0).reshape(-1,2)
+        kp2d_data[f'{camera_id}_right'][:,0] -= width
+        
+    return kp2d_data
+
+def show_points(coords, labels, ax, marker_size=375):
+    pos_points = coords[labels==1]
+    neg_points = coords[labels==0]
+    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+
+
+
 class R2D2DatasetBlock(Dataset):
 
     def __init__(self, data_folder='~/Desktop/data/r2d2_household/pen_out_several/Fri_Apr_21_10_35_02_2023',
-        camera_id='23404442_left', scale=(1.,1.), trans_to_tensor=None,
+        camera_id='23404442_left', scale=1., trans_to_tensor=None, n_kp=7,
     ):
         ''' A block of R2D2 dataset. Concat all R2D2DatasetBlocks to construct full R2D2 dataset.
         This class can be used as a stand-alone dataset by itself.
@@ -60,7 +121,6 @@ class R2D2DatasetBlock(Dataset):
                                 {23404442_left', '23404442_right', '29838012_left','29838012_right'}
               NOTE: '19824535_left', '19824535_right are excluded because they locate on the gripper
         '''
-
         if trans_to_tensor is None:
             self.trans_to_tensor = transforms.Compose([
                 transforms.ToTensor(),
@@ -69,6 +129,7 @@ class R2D2DatasetBlock(Dataset):
         else: self.trans_to_tensor = trans_to_tensor
 
         self.scale = scale
+        self.n_kp = n_kp
         self.camera_id = camera_id
 
         self.data_folder = abspath(expanduser(data_folder))
@@ -78,15 +139,25 @@ class R2D2DatasetBlock(Dataset):
 
         # list of (time, camera_id) pairs
         # self.data_ids = list(itertools.product(range(len(self.timestep_list)), self.camera_ids))
-
         img_sample = self.timestep_list[0]['observation']['image'][self.camera_id]
-        self.height = int(img_sample.shape[0] * self.scale[0])
-        self.width = int(img_sample.shape[1] * self.scale[1])
+        self.height = int(img_sample.shape[0] * self.scale)
+        self.width = int(img_sample.shape[1] * self.scale)
+        
+        kp2d_label_dir = join(self.mp4_path, list(filter(lambda path:'.'not in path, os.listdir(self.mp4_path)))[0], 'labeled-data')
+        self.kp2d_gt = get_kp2ds(
+            [join(kp2d_label_dir, path) for path in list(filter(lambda path:'_'not in path, os.listdir(kp2d_label_dir)))],
+            width=img_sample.shape[1], n_kp=self.n_kp
+        )
+        self.kp2d_gt = torch.tensor(self.kp2d_gt[self.camera_id] * self.scale, dtype=torch.float32)
 
     def __len__(self):  return len(self.timestep_list)
 
     def __getitem__(self, idx):
-
+        ''' Returns the following:
+            - img:          (3,H,W) torch.Tensor
+            - joint_angle:  (7) torch.Tensor
+            - self.kp2d_gt: (self.n_kp,2) torch.Tensor
+        '''
         # (time, camera_id) = self.data_ids[idx]
         img = self.timestep_list[idx]['observation']['image'][self.camera_id] # dict: camera_id -> img
         img = Image.fromarray(img) # (H,W,3) uint8
@@ -94,6 +165,39 @@ class R2D2DatasetBlock(Dataset):
         img = self.trans_to_tensor(img)                 # (3,H,W)
         joint_angle = self.timestep_list[idx]['action']['joint_position']
         joint_angle = torch.tensor(joint_angle, dtype=torch.float)
+
+        return img, joint_angle, self.kp2d_gt
+
+class R2D2DatasetBlockWithSeg(R2D2DatasetBlock):
+
+    def __init__(self, data_folder='~/Desktop/data/r2d2_household/pen_out_several/Fri_Apr_21_10_35_02_2023',
+        camera_id='23404442_left', scale=1., trans_to_tensor=None, n_kp=7,
+    ):
+        super().__init__(data_folder, camera_id, scale, trans_to_tensor, n_kp)
+        self.seg_path = join(self.data_folder, f"{self.camera_id}_seg.npz")
+        self.seg_masks = np.load(self.seg_path)['masks']
+    
+    def __getitem__(self, idx):
+        img, joint_angle, kp2d_gt = super().__getitem__(idx)
+
+        seg = cv2.resize(self.seg_masks[idx].astype(np.uint8), (self.width, self.height))
+        seg = torch.tensor(seg)
+        return img, joint_angle, kp2d_gt, seg
+
+class R2D2StereoDatasetBlock(R2D2DatasetBlock):
+
+    def __getitem__(self, idx):
+        cam_id_base = self.camera_id[:-5]
+        img_l = self.timestep_list[idx]['observation']['image'][f'{cam_id_base}_left'] 
+        img_r = self.timestep_list[idx]['observation']['image'][f'{cam_id_base}_right'] 
+        img_l, img_r = Image.fromarray(img_l), Image.fromarray(img_r)
+        img_l, img_r = img_l.resize((self.width, self.height)), img_r.resize((self.width, self.height))
+        img_l, img_r = self.trans_to_tensor(img_l), self.trans_to_tensor(img_r)
+
+        joint_angle = self.timestep_list[idx]['action']['joint_position']
+        joint_angle = torch.tensor(joint_angle, dtype=torch.float)
+
+        img = torch.cat((img_l, img_r), dim=1)  # Stack left and right images along X axis
 
         return img, joint_angle
 
@@ -134,6 +238,7 @@ def get_r2d2_dataset(data_folder='~/Desktop/data/r2d2_household/pen_out_several'
     pbar.close()
 
     return ConcatDataset(dataset_blocks)
+
 
 
 if __name__ == "__main__":
