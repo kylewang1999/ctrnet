@@ -143,12 +143,16 @@ class R2D2DatasetBlock(Dataset):
         self.height = int(img_sample.shape[0] * self.scale)
         self.width = int(img_sample.shape[1] * self.scale)
         
-        kp2d_label_dir = join(self.mp4_path, list(filter(lambda path:'.'not in path, os.listdir(self.mp4_path)))[0], 'labeled-data')
-        self.kp2d_gt = get_kp2ds(
-            [join(kp2d_label_dir, path) for path in list(filter(lambda path:'_'not in path, os.listdir(kp2d_label_dir)))],
-            width=img_sample.shape[1], n_kp=self.n_kp
-        )
-        self.kp2d_gt = torch.tensor(self.kp2d_gt[self.camera_id] * self.scale, dtype=torch.float32)
+        try:
+            kp2d_label_dir = join(self.mp4_path, list(filter(lambda path:'.'not in path, os.listdir(self.mp4_path)))[0], 'labeled-data')
+            self.kp2d_gt = get_kp2ds(
+                [join(kp2d_label_dir, path) for path in list(filter(lambda path:'_'not in path, os.listdir(kp2d_label_dir)))],
+                width=img_sample.shape[1], n_kp=self.n_kp
+            )
+            self.kp2d_gt = torch.tensor(self.kp2d_gt[self.camera_id] * self.scale, dtype=torch.float32)
+        except IndexError:
+            print(f"WARNING: No 2D keypoint annotations found for camera [{self.camera_id}].")
+            self.kp2d_gt = None
 
     def __len__(self):  return len(self.timestep_list)
 
@@ -157,6 +161,7 @@ class R2D2DatasetBlock(Dataset):
             - img:          (3,H,W) torch.Tensor
             - joint_angle:  (7) torch.Tensor
             - self.kp2d_gt: (self.n_kp,2) torch.Tensor
+            - extrinsic:    (6,) torch.Tensor. Rotation, translation.
         '''
         # (time, camera_id) = self.data_ids[idx]
         img = self.timestep_list[idx]['observation']['image'][self.camera_id] # dict: camera_id -> img
@@ -164,9 +169,11 @@ class R2D2DatasetBlock(Dataset):
         img = img.resize((self.width, self.height))
         img = self.trans_to_tensor(img)                 # (3,H,W)
         joint_angle = self.timestep_list[idx]['action']['joint_position']
-        joint_angle = torch.tensor(joint_angle, dtype=torch.float)
-
-        return img, joint_angle, self.kp2d_gt
+        joint_angle = torch.tensor(joint_angle, dtype=torch.float32)
+        extrinsic = torch.tensor(self.timestep_list[idx]['observation']['camera_extrinsics'][self.camera_id], dtype=torch.float32)
+        
+        if self.kp2d_gt is None: return img, joint_angle, extrinsic
+        else:                    return img, joint_angle, extrinsic, self.kp2d_gt
 
 class R2D2DatasetBlockWithSeg(R2D2DatasetBlock):
 
@@ -174,15 +181,18 @@ class R2D2DatasetBlockWithSeg(R2D2DatasetBlock):
         camera_id='23404442_left', scale=1., trans_to_tensor=None, n_kp=7,
     ):
         super().__init__(data_folder, camera_id, scale, trans_to_tensor, n_kp)
-        self.seg_path = join(self.data_folder, f"{self.camera_id}_seg.npz")
+        self.seg_path = join(self.data_folder, f"{self.camera_id}_seg_3joints.npz")
         self.seg_masks = np.load(self.seg_path)['masks']
     
     def __getitem__(self, idx):
-        img, joint_angle, kp2d_gt = super().__getitem__(idx)
+        if self.kp2d_gt is None:
+            img, joint_angle, extrinsic = super().__getitem__(idx)
+        else:
+            img, joint_angle, extrinsic, kp2d_gt = super().__getitem__(idx)
 
         seg = cv2.resize(self.seg_masks[idx].astype(np.uint8), (self.width, self.height))
         seg = torch.tensor(seg)
-        return img, joint_angle, kp2d_gt, seg
+        return img, joint_angle, kp2d_gt, extrinsic, seg
 
 class R2D2StereoDatasetBlock(R2D2DatasetBlock):
 

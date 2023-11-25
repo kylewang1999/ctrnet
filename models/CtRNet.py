@@ -31,6 +31,7 @@ class CtRNet(torch.nn.Module):
         if args.pretrained_keypoint_seg_model_path is not None:
             print("\nLoading keypoint segmentation model from {}\n".format(args.pretrained_keypoint_seg_model_path))
             self.keypoint_seg_predictor.load_state_dict(torch.load(args.pretrained_keypoint_seg_model_path))
+
         else: print("\nTraining cTrNet from Scratch ... \n")
 
         self.keypoint_seg_predictor.eval()
@@ -126,7 +127,7 @@ class CtRNet(torch.nn.Module):
         """
         batch_size = cTr.shape[0]
         pose_matrix = torch.zeros((batch_size, 4, 4), device=self.device)
-        pose_matrix[:, :3, :3] = kornia.geometry.conversions.angle_axis_to_rotation_matrix(cTr[:, :3])
+        pose_matrix[:, :3, :3] = kornia.geometry.conversions.axis_angle_to_rotation_matrix(cTr[:, :3])
         pose_matrix[:, :3, 3] = cTr[:, 3:]
         pose_matrix[:, 3, 3] = 1
         return pose_matrix
@@ -209,12 +210,46 @@ class CtRNet(torch.nn.Module):
 
             img_ref = torch.sigmoid(segmentation).detach()
             #loss_reproj = 0.0005 * criterionMSE_mean(points_2d, points_2d_proj_batch)
-            loss_mse = 0.001 * criterions["mse_sum"](mask_batch, img_ref.squeeze())
-            loss = loss_mse + loss_bce 
+            loss_mse = criterions["mse_sum"](mask_batch, img_ref.squeeze())
+            loss = 1e-3 * loss_mse + 1. * loss_bce 
             
-        return loss
+        return loss, loss_mse, loss_bce, mask_batch
 
 
+class CtRNetBaseOnly(CtRNet):
 
+    ''' CtRNet for robot base only. No need for joint_angles input '''
+
+    def train_on_batch(self, img, joint_angles, robot_renderer, points_3d, criterions, phase='train'):
+        # img: (B, 3, H, W)
+        # joint_angles: (B, 7)
+        with torch.set_grad_enabled(phase == 'train'):
+            points_2d, segmentation = self.keypoint_seg_predictor(img)
+
+            mask_list, seg_weight_list = [], []
+
+            for b in range(img.shape[0]):
+                cTr = self.bpnp(points_2d[b][None], points_3d, self.K)
+                robot_mesh = robot_renderer.get_robot_mesh(joint_angles[b]) # Change this to configure which joints to render
+                
+                rendered_image = self.render_single_robot_mask(cTr.squeeze(), robot_mesh, robot_renderer)
+                mask_list.append(rendered_image)
+                points_2d_proj = batch_project(cTr, points_3d, self.K)
+                reproject_error = criterions["mse_mean"](points_2d[b], points_2d_proj.squeeze())
+                seg_weight = torch.exp(-reproject_error * self.args.reproj_err_scale)
+                seg_weight_list.append(seg_weight)
+
+            mask_batch = torch.cat(mask_list,0)
+
+            loss_bce = 0
+            for b in range(segmentation.shape[0]):
+                loss_bce = loss_bce + seg_weight_list[b] * criterions["bce"](segmentation[b].squeeze(), mask_batch[b].detach())
+
+            img_ref = torch.sigmoid(segmentation).detach()
+            #loss_reproj = 0.0005 * criterionMSE_mean(points_2d, points_2d_proj_batch)
+            loss_mse = criterions["mse_sum"](mask_batch, img_ref.squeeze())
+            loss = 1e-4 * loss_mse + 1. * loss_bce 
+            
+        return loss, loss_mse, loss_bce, mask_batch
 
 

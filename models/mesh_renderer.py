@@ -19,6 +19,7 @@ from pytorch3d.renderer import (
 
 from os.path import exists
 
+# TODO: New class for just base, see rendered img before training
 
 class RobotMeshRenderer():
     """
@@ -88,8 +89,11 @@ class RobotMeshRenderer():
         
     def get_robot_mesh(self, joint_angle):
         
+        assert len(self.mesh_files) <= len(joint_angle), f'Cannot have more meshes than joints. len(self.mesh_files) = {len(self.mesh_files)}, len(joint_angle) = {len(joint_angle)}'
         R_list, t_list = self.robot.get_joint_RT(joint_angle)
-        assert len(self.mesh_files) == R_list.shape[0] and len(self.mesh_files) == t_list.shape[0]
+        if len(self.mesh_files) < len(joint_angle):
+            R_list = R_list[:len(self.mesh_files)]
+            t_list = t_list[:len(self.mesh_files)]
 
         verts_list = []
         faces_list = []

@@ -76,7 +76,7 @@ class BPnP(torch.autograd.Function):
                     pts3d_flat.grad.zero_()
                     K_flat.grad.zero_()
 
-                R = kn.geometry.conversions.angle_axis_to_rotation_matrix(P_6d_flat[0:m-3].view(1,3))
+                R = kn.geometry.conversions.axis_angle_to_rotation_matrix(P_6d_flat[0:m-3].view(1,3))
 
                 P = torch.cat((R[0,0:3,0:3].view(3,3), P_6d_flat[m-3:m].view(3,1)),dim=-1)
                 KP = torch.mm(K_flat.view(3,3), P)
@@ -179,7 +179,7 @@ class BPnP_m3d(torch.autograd.Function):
                     pts3d_flat.grad.zero_()
                     K_flat.grad.zero_()
 
-                R = kn.geometry.conversions.angle_axis_to_rotation_matrix(P_6d_flat[0:m-3].view(1,3))
+                R = kn.geometry.conversions.axis_angle_to_rotation_matrix(P_6d_flat[0:m-3].view(1,3))
 
                 P = torch.cat((R[0,0:3,0:3].view(3,3), P_6d_flat[m-3:m].view(3,1)),dim=-1)
                 KP = torch.mm(K_flat.view(3,3), P)
@@ -284,7 +284,7 @@ class BPnP_fast(torch.autograd.Function):
                     pts3d_flat.grad.zero_()
                     K_flat.grad.zero_()
 
-                R = kn.geometry.conversions.angle_axis_to_rotation_matrix(P_6d_flat[0:m-3].view(1,3))
+                R = kn.geometry.conversions.axis_angle_to_rotation_matrix(P_6d_flat[0:m-3].view(1,3))
 
                 P = torch.cat((R[0,0:3,0:3].view(3,3), P_6d_flat[m-3:m].view(3,1)),dim=-1)
                 KP = torch.mm(K_flat.view(3,3), P)
@@ -338,7 +338,7 @@ def batch_project(P, pts3d, K, angle_axis=True):
     device = P.device
     pts3d_h = torch.cat((pts3d, torch.ones(n, 1, device=device)), dim=-1)
     if angle_axis:
-        R_out = kn.geometry.conversions.angle_axis_to_rotation_matrix(P[:, 0:3].view(bs, 3))
+        R_out = kn.geometry.conversions.axis_angle_to_rotation_matrix(P[:, 0:3].view(bs, 3))
         PM = torch.cat((R_out[:,0:3,0:3], P[:, 3:6].view(bs, 3, 1)), dim=-1)
     else:
         PM = P
@@ -357,7 +357,7 @@ def batch_transform_3d(P, pts3d, angle_axis=True):
     device = P.device
     pts3d_h = torch.cat((pts3d, torch.ones(n, 1, device=device)), dim=-1)
     if angle_axis:
-        R_out = kn.geometry.conversions.angle_axis_to_rotation_matrix(P[:, 0:3].view(bs, 3))
+        R_out = kn.geometry.conversions.axis_angle_to_rotation_matrix(P[:, 0:3].view(bs, 3))
         PM = torch.cat((R_out[:,0:3,0:3], P[:, 3:6].view(bs, 3, 1)), dim=-1)
     else:
         PM = P

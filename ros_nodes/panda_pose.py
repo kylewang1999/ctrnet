@@ -111,7 +111,7 @@ def gotData(img_msg, joint_msg):
 
         # Rotating to ROS format
         cvTr= np.eye(4)
-        cvTr[:3, :3] = kornia.geometry.conversions.angle_axis_to_rotation_matrix(cTr[:, :3]).detach().cpu().numpy().squeeze()
+        cvTr[:3, :3] = kornia.geometry.conversions.axis_angle_to_rotation_matrix(cTr[:, :3]).detach().cpu().numpy().squeeze()
         cvTr[:3, 3] = np.array(cTr[:, 3:].detach().cpu())
 
         # ROS camera to CV camera transform
